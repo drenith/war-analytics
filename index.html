@@ -1,0 +1,105 @@
+<!doctype html>
+<html>
+	<head>
+		<style type="text/css">
+			#results {
+				float: left;
+				width: 20%;
+			}
+
+			#results th, td {
+				padding: 2px;
+			}
+		</style>
+		<!-- v2 -->
+		<script src='https://unpkg.com/tesseract.js@v2.1.0/dist/tesseract.min.js'></script>
+		<script>
+window.addEventListener('load', (event) => {
+	document.getElementById("image_select").addEventListener('change', async (event) => {
+		try {
+			const file = event.target.files[0];
+			const bitmap = await createImageBitmap(file);
+			const canvas = document.getElementById("canvas");
+			canvas.width = bitmap.width;
+			canvas.height = bitmap.height;
+			const ctx = canvas.getContext("2d");
+			ctx.drawImage(bitmap, 0, 0);
+			
+			const imgData = ctx.getImageData(0, 0, ctx.canvas.width, ctx.canvas.height);
+			const pixels = imgData.data;
+			for(let i = 0; i < pixels.length; i += 4) {
+				const red = pixels[i];
+				const green = pixels[i + 1];
+				const blue = pixels[i + 2];
+				const alpha = pixels[i + 3];
+				
+				if(red < 130 && green < 130 && blue < 130) {
+					pixels[i] = 0;
+					pixels[i + 1] = 0;
+					pixels[i + 2] = 0;
+				}				
+			}
+			ctx.putImageData(imgData, 0, 0);
+			
+			const { createWorker } = Tesseract;
+			(async () => {
+				const worker = createWorker();
+				await worker.load();
+				await worker.loadLanguage('eng');
+				await worker.initialize('eng');
+				await worker.setParameters({
+					tessedit_char_whitelist: '0123456789',
+					tessedit_pageseg_mode: '4'
+				});
+				const { data: { text } } = await worker.recognize(canvas);
+				const rows = text.split(/\r?\n/g).filter(e => e.trim().length > 0).map(e => e.trim());
+				console.log(rows.join("\n"));
+				const table = document.getElementById('results');
+				for(let row of rows) {
+					console.log(row);
+					const tr = table.insertRow(-1);
+					let cells = row.split(/\s+/g);
+					
+					while(cells.length < 8) {
+						cells.unshift("{E}");
+					}
+
+					while(cells.length > 8) {
+						cells[0] = cells.shift() + " - " + cells[0];
+					}
+
+					for(let cell of cells) {
+						const td = tr.insertCell(-1);
+						td.contentEditable = true;
+						td.appendChild(document.createTextNode(cell));
+					}
+				}
+			})();			
+		} catch (err) {
+			console.log(err);
+		}
+	}); 
+});
+		</script>
+	</head>
+	<body>
+		<input id="image_select" type="file"/>
+		<br>
+		<canvas id="canvas"></canvas>
+		<table id="results" border=1px>
+			<thead>
+				<tr>
+					<th>Rank</th>
+					<th>Player</th>
+					<th>Score</th>
+					<th>Kills</th>
+					<th>Deaths</th>
+					<th>Assists</th>
+					<th>Healing</th>
+					<th>Damage</th>
+				</tr>
+			</thead>
+			<tbody></tbody>
+		</table>
+	</body>
+</html>
