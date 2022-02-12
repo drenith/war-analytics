@@ -1,6 +1,7 @@
 <!doctype html>
 <html>
 	<head>
+		<meta charset="UTF-8">
 		<style type="text/css">
 			#results {
 				float: left;
@@ -10,71 +11,208 @@
 			#results th, td {
 				padding: 2px;
 			}
+			
+			#dropzone {
+				width:200px;
+				height:150px;
+				border: 1px solid;
+			}
 		</style>
 		<!-- v2 -->
 		<script src='https://unpkg.com/tesseract.js@v2.1.0/dist/tesseract.min.js'></script>
 		<script>
-window.addEventListener('load', (event) => {
-	document.getElementById("image_select").addEventListener('change', async (event) => {
-		try {
-			const file = event.target.files[0];
-			const bitmap = await createImageBitmap(file);
-			const canvas = document.getElementById("canvas");
-			canvas.width = bitmap.width;
-			canvas.height = bitmap.height;
-			const ctx = canvas.getContext("2d");
-			ctx.drawImage(bitmap, 0, 0);
-			
-			const imgData = ctx.getImageData(0, 0, ctx.canvas.width, ctx.canvas.height);
-			const pixels = imgData.data;
-			for(let i = 0; i < pixels.length; i += 4) {
-				const red = pixels[i];
-				const green = pixels[i + 1];
-				const blue = pixels[i + 2];
-				const alpha = pixels[i + 3];
-				
-				if(red < 130 && green < 130 && blue < 130) {
-					pixels[i] = 0;
-					pixels[i + 1] = 0;
-					pixels[i + 2] = 0;
-				}				
+		
+function getPixel(x, y, imgData) {
+	const red = y * (imgData.width * 4) + x * 4;
+	return [imgData.data[red], imgData.data[red + 1], imgData.data[red + 2], imgData.data[red + 3]];
+}
+
+function setPixel(x, y, imgData, color) {
+	const red = y * (imgData.width * 4) + x * 4;
+	imgData.data[red] = color[0];
+	imgData.data[red + 1] = color[1];
+	imgData.data[red + 2] = color[2];
+	//imgData[red + 3] = color[3];
+}
+
+/**
+ * left, top, width, height
+ */
+function getRows(imageData) {
+	const rows = [];
+		
+	let top;
+	let topFound = false;
+	for(let y = 0; y < imageData.height; y++) {
+		
+		let hasContent = false;
+		for(let x = 0; x < imageData.width; x++) {
+			const pixel = getPixel(x, y, imageData);
+			if(pixel[0] !== 0 && pixel[1] !== 0 && pixel[2] !== 0) {
+				hasContent = true;
 			}
-			ctx.putImageData(imgData, 0, 0);
+		}
+		
+		if(hasContent && !topFound) {
+			top = y;
+			topFound = true;
+		}
+		
+		if(!hasContent && topFound) {
+			if(y - top > 20) {
+				rows.push([0, top, imageData.width, y - top]);
+				topFound = false;
+			}
+		}
+	}
+	
+	return rows;
+}
+
+/**
+ * left, top, width, height
+ */
+function getColumns(imageData) {
+	const columns = [];
+	
+	let left;
+	let leftFound = false;
+	
+	for(let x = 0; x < imageData.width; x++) {
+	
+		let hasContent = false;
+		for(let y = 0; y < imageData.height; y++) {
+			const pixel = getPixel(x, y, imageData);
+			if(pixel[0] !== 0 && pixel[1] !== 0 && pixel[2] !== 0) {
+				hasContent = true;
+			}
+		}
+	
+		if(hasContent && !leftFound) {
+			left = x;
+			leftFound = true;
+		}
+		
+		if(!hasContent && leftFound) {
+			columns.push([left, 0, x - left, imageData.height]);
+			leftFound = false;
+		}
+	}
+
+	return columns;
+}
+
+async function performOCR(bitmap) {
+	const { createWorker } = Tesseract;
+
+	try {
+		const canvas = document.getElementById("canvas");
+		canvas.width = bitmap.width;
+		canvas.height = bitmap.height;
+		const ctx = canvas.getContext("2d");
+		ctx.drawImage(bitmap, 0, 0);
+		
+		const imgData = ctx.getImageData(0, 0, ctx.canvas.width, ctx.canvas.height);
+		const pixels = imgData.data;
+		
+		for(let i = 0; i < pixels.length; i += 4) {
+			const red = pixels[i];
+			const green = pixels[i + 1];
+			const blue = pixels[i + 2];
+			const alpha = pixels[i + 3];
 			
-			const { createWorker } = Tesseract;
-			(async () => {
+			if(red < 130 && green < 130 && blue < 130) {
+				pixels[i] = 0;
+				pixels[i + 1] = 0;
+				pixels[i + 2] = 0;
+			}				
+		}
+
+		ctx.putImageData(imgData, 0, 0);
+				
+		const rows = getRows(imgData);
+		
+		console.log(rows);
+		
+		ctx.strokeStyle = 'green';
+		rows.forEach(row => ctx.strokeRect.apply(ctx, row));
+
+		const cellsByRow = rows.map(row => {
+			const columns = getColumns(ctx.getImageData.apply(ctx, row));
+			return columns.map(column => {
+				column[1] = row[1] + column[1];
+				return column;
+			});
+		});
+		
+		console.log(cellsByRow);
+
+		ctx.strokeStyle = 'yellow';
+		cellsByRow.forEach(cells => cells.forEach(cell => ctx.strokeRect.apply(ctx, cell)));
+		
+		const workingcanvas = document.getElementById('workingcanvas');
+		for(cells of cellsByRow) {
+			for(cell of cells) {
+				workingcanvas.width = cell[2];
+				workingcanvas.height = cell[3];
+				const ctx2 = workingcanvas.getContext("2d");				
+				ctx2.putImageData(ctx.getImageData.apply(ctx, cell), 0, 0);
+
 				const worker = createWorker();
+
 				await worker.load();
 				await worker.loadLanguage('eng');
 				await worker.initialize('eng');
 				await worker.setParameters({
-					tessedit_char_whitelist: '0123456789',
-					tessedit_pageseg_mode: '4'
+					tessedit_char_whitelist: '0123456789'
 				});
-				const { data: { text } } = await worker.recognize(canvas);
-				const rows = text.split(/\r?\n/g).filter(e => e.trim().length > 0).map(e => e.trim());
-				console.log(rows.join("\n"));
-				const table = document.getElementById('results');
-				for(let row of rows) {
-					console.log(row);
-					const tr = table.insertRow(-1);
-					let cells = row.split(/\s+/g);
-					
-					while(cells.length < 8) {
-						cells.unshift("{E}");
-					}
 
-					while(cells.length > 8) {
-						cells[0] = cells.shift() + " - " + cells[0];
-					}
+				const { data: { text } } = await worker.recognize(workingcanvas);
+				console.log(text);
+			}
+		}
+	} catch (err) {
+		console.log(err);
+	}		
+}
+		
+window.addEventListener('load', (event) => {
+	const dropzone = document.querySelector("#dropzone");
+	
+	document.addEventListener('paste', async (event) => {
+		var item = event.clipboardData.items[0];
 
-					for(let cell of cells) {
-						const td = tr.insertCell(-1);
-						td.contentEditable = true;
-						td.appendChild(document.createTextNode(cell));
-					}
-				}
-			})();			
+		console.log(item);
+
+		const type = item.type;
+
+		if(type.includes('image')) {
+			performOCR(createImageBitmap(item.getAsFile()));
+		}
+	});
+	
+	document.addEventListener('dragstart', (event) => {
+		event.dataTransfer.setData("text", "");
+	});
+	
+	dropzone.addEventListener('dragover', (event) => {
+		event.stopPropagation();
+		event.preventDefault();
+	});
+	
+	dropzone.addEventListener('drop', async (event) => {
+		event.stopPropagation();
+		event.preventDefault();
+		const image = new Image();
+		image.src = event.dataTransfer.getData("text");
+		await image.decode();
+		performOCR(image);
+	});
+
+	document.getElementById("image_select").addEventListener('change', async (event) => {
+		try {
+			const file = event.target.files[0];
+			performOCR(await createImageBitmap(file));
 		} catch (err) {
 			console.log(err);
 		}
@@ -84,8 +222,10 @@ window.addEventListener('load', (event) => {
 	</head>
 	<body>
 		<input id="image_select" type="file"/>
+		<div id="dropzone"></div>
 		<br>
 		<canvas id="canvas"></canvas>
+		<canvas id="workingcanvas"></canvas>
 		<table id="results" border=1px>
 			<thead>
 				<tr>
